@@ -12,8 +12,16 @@ pipeline {
     stages {
         stage('Build') {
             steps {
-                sh 'echo "Building '
-                sh './mvnw spring-boot:build-image'
+                sh 'echo "Building webapp to container'
+                acrQuickTask
+                    gitPath: '', 
+                    gitRefspec: '', 
+                    gitRepo: '', 
+                    imageNames: [[image: 'amdemoacr.azurecr.io/image:latest']], 
+                    registryName: 'amdemoacr', 
+                    resourceGroupName: 'amdemo', 
+                    tarball: '', 
+                    variant: ''
             }
             post {
                 sh 'echo "Build successful'
