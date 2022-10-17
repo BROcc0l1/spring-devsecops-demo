@@ -12,7 +12,11 @@ pipeline {
     stages {
         stage('Build') {
             steps {
-                sh 'echo "Building webapp to container'
+                sh 'echo "Building webapp with Maven wrapper...'
+
+                sh './mvnw package'
+
+                sh 'echo "Building Docker image with ACR..."'
                 acrQuickTask
                     gitPath: '', 
                     gitRefspec: '', 
