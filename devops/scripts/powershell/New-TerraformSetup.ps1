@@ -38,6 +38,14 @@ try {
     # Create blob container
     Write-Host "Creating Blob Container..."
     New-AzStorageContainer -Name $ContainerName -Context $storageAccount.context -Permission blob
+
+    Write-Host "Setting delete lock on the created RG..."
+    Set-AzResourceLock `
+        -LockName "$ResourceGroupName-delete-lock" `
+        -LockLevel "CanNotDelete" `
+        -LockNotes "Terraform state must not be deleted" `
+        -ResourceGroupName $ResourceGroupName `
+        -Force
 }
 catch {
     Write-Error "$($_.Exception.Message)"
