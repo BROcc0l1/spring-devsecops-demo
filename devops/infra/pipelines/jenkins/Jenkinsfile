@@ -1,0 +1,33 @@
+pipeline {
+    agent any
+
+    parameters {
+
+    }
+
+    options {
+
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                sh 'echo "Building '
+                sh './mvnw spring-boot:build-image'
+            }
+            post {
+                sh 'echo "Build successful'
+            }
+        }
+        stage('Test') {
+            steps {
+                
+            }
+        }
+        stage('Deploy') {
+            steps {
+                
+            }
+        }
+    }
+}
