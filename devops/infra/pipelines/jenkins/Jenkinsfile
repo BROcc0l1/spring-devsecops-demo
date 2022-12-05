@@ -1,44 +1,127 @@
 pipeline {
-    agent any
-
-    parameters {
-
+    agent {
+        label 'node01'
     }
 
-    options {
-
+    parameters {
+        string(name: 'GIT_URL', defaultValue: 'https://github.com/BROcc0l1/spring-devsecops-demo', description: 'URL for repo to checkout')
+        string(name: 'RG', defaultValue: 'amdemo-rg', description: 'ACR resource group')
+        string(name: 'ACR_NAME', defaultValue: 'amdemoacr', description: 'Name of ACR to save image')
+        string(name: 'IMAGE_NAME', defaultValue: 'petclinic', description: 'Image repository')
+        string(name: 'WEBAPP_NAME', defaultValue: 'am-demo-wa', description: 'WebApp name')
     }
 
     stages {
+        stage('Verify') {
+            steps {
+                cleanWs()
+
+                git branch: 'main', poll: false, url: 'https://github.com/BROcc0l1/spring-devsecops-demo'
+            
+                echo "Running maven verify and Dependency Check"
+                sh "./mvnw verify"
+                archiveArtifacts artifacts: "target/dependency-check-report.html", followSymlinks: false
+            }
+        }
         stage('Build') {
             steps {
-                sh 'echo "Building webapp with Maven wrapper...'
-
+                cleanWs()
+                
+                echo "Building webapp with Maven wrapper..."
                 sh './mvnw package'
 
-                sh 'echo "Building Docker image with ACR..."'
-                acrQuickTask
-                    gitPath: '', 
-                    gitRefspec: '', 
-                    gitRepo: '', 
-                    imageNames: [[image: 'amdemoacr.azurecr.io/image:latest']], 
-                    registryName: 'amdemoacr', 
-                    resourceGroupName: 'amdemo', 
-                    tarball: '', 
-                    variant: ''
+                echo "Building Docker image with ACR..."
+                sh 'echo "Image tag: $BUILD_NUMBER"'
+                sh 'IMAGE_TAG=$BUILD_NUMBER'
+                sh 'echo $IMAGE_TAG'
+
+                withCredentials([usernamePassword(credentialsId: 'aad-jenkins-sp', passwordVariable: 'AZURE_CLIENT_SECRET', usernameVariable: 'AZURE_CLIENT_ID'),
+                                 string(credentialsId: 'azure-tenant-id', variable: 'AZURE_TENANT_ID'), 
+                                 string(credentialsId: 'azure-subscription-id', variable: 'AZURE_SUBSCRIPTION_ID')]) {
+                    sh 'az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET -t $AZURE_TENANT_ID'
+                    sh 'az account set -s $AZURE_SUBSCRIPTION_ID'
+                    sh 'az acr build --image ${IMAGE_NAME}:${BUILD_NUMBER} --registry $ACR_NAME --file Dockerfile . '
+                }
+            }
+        }
+        stage('SAST') {
+            steps {
+                echo 'Scanning with SAST...'
+                sh 'trivy filesystem . spring-devsecops-demo --format table | tee sast_report.txt'
+                archiveArtifacts artifacts: "sast_report.txt"
+
+                echo 'Scanning with container...'
+                withCredentials([usernamePassword(credentialsId: 'aad-jenkins-sp', passwordVariable: 'AZURE_CLIENT_SECRET', usernameVariable: 'AZURE_CLIENT_ID'),
+                                    string(credentialsId: 'azure-tenant-id', variable: 'AZURE_TENANT_ID'), 
+                                    string(credentialsId: 'azure-subscription-id', variable: 'AZURE_SUBSCRIPTION_ID')]) {
+
+                    sh 'az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET -t $AZURE_TENANT_ID'
+                    sh 'az account set -s $AZURE_SUBSCRIPTION_ID'
+                    sh 'az acr login -n $ACR_NAME'
+                    sh 'docker pull $ACR_NAME/$IMAGE_NAME:$BUILD_NUMBER'
+                    sh 'trivy image $ACR_NAME/$IMAGE_NAME:$BUILD_NUMBER --format table | tee sast_container_report.txt'    
+                    sh 'docker container rm $ACR_NAME/$IMAGE_NAME:$BUILD_NUMBER'
+                    archiveArtifacts artifacts: "sast_container_report.txt"           
+                }
+            }
+        }
+        stage('DAST') {
+            environment {
+                RESOURCE_GROUP = 'dast-rg'
+                CONTAINER_NAME = 'petclinic-dast-scan'
+                CONTAINER_DNS = 'am-demo-dast'
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'aad-jenkins-sp', passwordVariable: 'AZURE_CLIENT_SECRET', usernameVariable: 'AZURE_CLIENT_ID'),
+                                 string(credentialsId: 'azure-tenant-id', variable: 'AZURE_TENANT_ID'), 
+                                 string(credentialsId: 'azure-subscription-id', variable: 'AZURE_SUBSCRIPTION_ID')]) {
+
+                    sh 'az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET -t $AZURE_TENANT_ID'
+                    sh 'az account set -s $AZURE_SUBSCRIPTION_ID'
+                    sh 'echo "Deploying image to staging webapp"'
+
+                    script {
+                        ACR_USERNAME = sh (script: "az acr credential show -n amdemoacr --query username", returnStdout: true).trim()
+                        ACR_PASSWORD = sh (script: "az acr credential show -n amdemoacr --query passwords[0].value", returnStdout: true).trim()
+                        sh "az container create --resource-group ${RESOURCE_GROUP} --name ${CONTAINER_NAME}-${BUILD_NUMBER} --image ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${BUILD_NUMBER} --registry-username ${ACR_USERNAME} --registry-password ${ACR_PASSWORD} --dns-name-label ${CONTAINER_DNS}-${BUILD_NUMBER} --ports 8080"
+                        sleep 30
+
+                        sh "owasp-zap -cmd -quickurl http://${CONTAINER_DNS}-${BUILD_NUMBER}.northeurope.azurecontainer.io:8080/ -quickprogress -quickout ${WORKSPACE}/zap_report.html"
+                        archiveArtifacts artifacts: "zap_report.html", followSymlinks: false
+                    }                     
+                }
             }
             post {
-                sh 'echo "Build successful'
-            }
+                always {
+                    echo "Removing container"
+                    sh "az container delete -y -n ${CONTAINER_NAME}-${BUILD_NUMBER} -g ${RESOURCE_GROUP}"
+                }
+            }   
         }
-        stage('Test') {
+        stage('Deploy_WebApp') {
             steps {
-                
-            }
-        }
-        stage('Deploy') {
-            steps {
-                
+                withCredentials([usernamePassword(credentialsId: 'aad-jenkins-sp', passwordVariable: 'AZURE_CLIENT_SECRET', usernameVariable: 'AZURE_CLIENT_ID'),
+                                 string(credentialsId: 'azure-tenant-id', variable: 'AZURE_TENANT_ID'), 
+                                 string(credentialsId: 'azure-subscription-id', variable: 'AZURE_SUBSCRIPTION_ID')]) {
+                    sh 'az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET -t $AZURE_TENANT_ID'
+                    sh 'az account set -s $AZURE_SUBSCRIPTION_ID'
+                    // Deploy Web App
+                    script {
+                        ACR_USERNAME = sh (script: "az acr credential show -n amdemoacr --query username", returnStdout: true).trim()
+                        ACR_PASSWORD = sh (script: "az acr credential show -n amdemoacr --query passwords[0].value", returnStdout: true).trim()
+
+                        sh "az webapp config container set \
+                            --resource-group $RG \
+                            --name $WEBAPP_NAME \
+                            --docker-custom-image-name ${IMAGE_NAME}:${BUILD_NUMBER} \
+                            --docker-registry-server-url https://${ACR_NAME}.azurecr.io \
+                            -u $ACR_USERNAME -p $ACR_PASSWORD"
+                    }
+                    // Restart web app to load new container
+                    sh 'az webapp restart --name $WEBAPP_NAME --resource-group $RG'
+                    // Logout from Azure
+                    sh 'az logout'
+                }
             }
         }
     }

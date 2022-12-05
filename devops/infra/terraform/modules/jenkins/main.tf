@@ -22,7 +22,7 @@ resource "azurerm_container_group" "jenkins-controller" {
   container {
     name   = "jenkins-controller"
     image  = "jenkins/jenkins:lts"
-    cpu    = "2"
+    cpu    = "1"
     memory = "2"
 
     volume {
@@ -47,8 +47,8 @@ resource "azurerm_container_group" "jenkins-controller" {
   container {
     name     = "caddy-ssl-server"
     image    = "caddy:latest"
-    cpu      = "1"
-    memory   = "1"
+    cpu      = "0.5"
+    memory   = "0.1"
     commands = ["caddy", "reverse-proxy", "--from", "${var.dns_name}.${var.resource_group_location}.azurecontainer.io", "--to", "localhost:8080"]
 
     ports {
@@ -57,7 +57,7 @@ resource "azurerm_container_group" "jenkins-controller" {
     }
 
     ports {
-      port     = 443
+      port     = 80
       protocol = "TCP"
     }
   }
@@ -67,7 +67,7 @@ resource "azurerm_container_group" "jenkins-controller" {
   }
 }
 
-output "jenkins-mi-id" {
-  value = azurerm_container_group.jenkins-controller.identity[0].principal_id
-  sensitive = true
-}
+# output "jenkins-mi-id" {
+#   value = azurerm_container_group.jenkins-controller.identity[0].principal_id
+#   sensitive = true
+# }

@@ -10,6 +10,11 @@ variable "resource_group_location" {
   default     = "northeurope"
 }
 
+variable "jenkins_sp_name" {
+  type        = string
+  description = "(Required) Jenkins service principal name"
+  default     = "am-demo-jenkins"
+}
 variable "jenkins_sa_resource_group_name" {
   type        = string
   description = "(Required) Resource Group to deploy Jenkins"
